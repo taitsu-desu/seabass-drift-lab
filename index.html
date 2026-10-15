@@ -38,6 +38,7 @@
   --f-num: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { margin: 0; }
 body {
   background: var(--bg);
@@ -121,6 +122,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .summary span { font-size: 11px; color: var(--muted); }
 .summary b { font: 500 15px var(--f-num); font-variant-numeric: tabular-nums; }
 .summary b.turn { color: var(--turn); }
+.summary b.shade { color: #ffd68c; font-size: 13px; }
 .summary .ghostv { font: 12px var(--f-num); color: var(--faint); }
 
 #charts { display: block; width: 100%; cursor: crosshair; touch-action: none; }
@@ -229,6 +231,12 @@ footer a { color: var(--muted); }
         <li><b>下流へメンド</b>：ベリーを強めて早く張らせます。ターンを手前・早めに起こしたい時の操作です。</li>
         <li><b>巻き速度</b>：対水速度（アクションの強さ）が上がり、頭はライン方向へ素早くそろいます。ドリフト要素は減ります。</li>
       </ul>
+    </section>
+    <section>
+      <h2>橋脚と明暗</h2>
+      <p><b>橋脚</b>は円柱まわりのポテンシャル流れで表しています。前面で流れが止まり、側面で最大2倍まで速まります。後ろには伴流（運動量が欠けた遅い流れ）の帯ができ、ラインやルアーがそこへ入ると流され方が急に変わります。真後ろはわずかに逆流します。ラインは橋脚をすり抜けず、巻き付くように曲がり、接触した時刻を記録します。</p>
+      <div class="formula">u − iv = U(1 − a²/z²)　＋　伴流の欠損 Δu ≈ 1.1·U·√(D/x)·exp(−y²/2σ²)</div>
+      <p><b>明暗</b>は夜の水面の明るさで、光量50%を境に明側と暗側を分けています。シーバスは暗い側で上流を向いて定位し、明るい側から流れてくるベイトを待つことが多いとされます。<b style="color:#ffd68c">暗部へ入った瞬間</b>の頭の向きと、流れに乗って入ったか引かれて横切ったかを、まとめ欄に表示しています。</p>
     </section>
     <section>
       <h2>省略していること</h2>

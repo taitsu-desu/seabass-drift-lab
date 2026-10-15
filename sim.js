@@ -66,6 +66,16 @@
     bellyMax: 4.0, // m, auto mend threshold
     mendStrength: 0.6, // fraction of the line (from the rod side) that is mended
     tMax: 120,
+    // structure / light
+    bridge: false,
+    bridgeX: 15, // bridge centre, m downstream of the angler
+    bridgeW: 10, // deck width along the flow (m)
+    piers: 2, // number of piers in the water
+    pierD: 2.0, // pier diameter (m)
+    shade: 'none', // 'none' | 'bridge' | 'lamp'
+    litSide: 'up', // bridge lights: 'up' | 'down' | 'both'
+    lampX: 10, // bank light position (m downstream)
+    lampR: 14, // radius lit by the bank light (m)
   };
 
   function flowAt(c, y) {
@@ -74,6 +84,53 @@
     const yc = c.coreFrac * W;
     const g = y < yc ? 0.5 * y / yc : 0.5 + 0.5 * (y - yc) / (W - yc);
     return c.U * Math.pow(Math.sin(Math.PI * g), 0.35);
+  }
+
+  function piersOf(c) {
+    const out = [];
+    if (!c.bridge || !c.piers) return out;
+    for (let k = 1; k <= c.piers; k++) out.push({ x: c.bridgeX, y: c.width * k / (c.piers + 1), r: c.pierD / 2 });
+    return out;
+  }
+
+  // Flow vector: base profile + potential flow around each pier + wake (momentum deficit) behind it.
+  function flowXY(c, x, y, P, out) {
+    const o = out || { x: 0, y: 0 };
+    let ux = flowAt(c, y), uy = 0;
+    const ps = P || piersOf(c);
+    for (let i = 0; i < ps.length; i++) {
+      const p = ps[i];
+      const dx = x - p.x, dy = y - p.y, r2 = dx * dx + dy * dy, a2 = p.r * p.r;
+      if (r2 < a2) { o.x = 0; o.y = 0; return o; }
+      const Up = flowAt(c, p.y);
+      const k = a2 / (r2 * r2);
+      ux -= Up * k * (dx * dx - dy * dy);
+      uy -= Up * k * 2 * dx * dy;
+      if (dx > 0 && dx < 80) {
+        const D = 2 * p.r, xs = dx + D;
+        const sig = 0.5 * Math.sqrt(D * xs);
+        ux -= Math.min(0.85, 1.1 * Math.sqrt(D / xs)) * Up * Math.exp(-dy * dy / (2 * sig * sig));
+      }
+    }
+    o.x = Math.max(ux, -0.3 * c.U); o.y = uy;
+    return o;
+  }
+
+  // Light level 0..1 on the water surface (night). < 0.5 counts as the dark side.
+  function lightAt(c, x, y) {
+    if (c.shade === 'bridge' && c.bridge) {
+      const x0 = c.bridgeX - c.bridgeW / 2, x1 = c.bridgeX + c.bridgeW / 2;
+      if (x >= x0 && x <= x1) return 0.08;
+      const up = x < x0, d = up ? x0 - x : x - x1;
+      const lit = c.litSide === 'both' || (c.litSide === 'up') === up;
+      if (!lit) return 0.12;
+      return 0.12 + 0.88 * Math.exp(-Math.pow(d / 28, 2));
+    }
+    if (c.shade === 'lamp') {
+      const r = Math.hypot(x - c.lampX, y + 1);
+      return 0.1 + 0.9 / (1 + Math.pow(r / c.lampR, 6));
+    }
+    return 1;
   }
 
   function wrap(a) {
@@ -87,6 +144,8 @@
     const lure = LURES[c.lure] || LURES.minnow;
     const W = c.width;
     const dt = 1 / 200, ITER = 12, REC = 0.05;
+    const P = piersOf(c);
+    const fo = { x: 0, y: 0 };
 
     const rodA = c.rodDeg * Math.PI / 180;
     const tipX = ROD_PROJ * Math.sin(rodA), tipY = ROD_PROJ * Math.cos(rodA);
@@ -136,7 +195,8 @@
       const b = pts[j][1] + (pts[j + 1][1] - pts[j][1]) * f;
       const X = tipX + a * tX + b * nX, Y = tipY + a * tY + b * nY;
       px.push(X); py.push(Y);
-      vx.push(flowAt(c, Y)); vy.push(0);
+      flowXY(c, X, Y, P, fo);
+      vx.push(fo.x); vy.push(fo.y);
       if (i < rest.length) s += rest[i];
     }
     px[0] = tipX; py[0] = tipY; vx[0] = 0;
@@ -156,7 +216,7 @@
     let mendIdx = 0, lastMend = -99;
     const frames = [], events = [{ t: 0, type: 'cast', x: lx0, y: ly0 }];
     let t = 0, nextRec = 0, tautState = false, prevPhi = null, endReason = '時間切れ';
-    let bankTime = 0, stillTime = 0, belly = 0;
+    let bankTime = 0, stillTime = 0, belly = 0, touching = false, lastTouch = -99, prevDark = null, lowTime = 0;
     const w = [];
 
     function chordInfo() {
@@ -194,7 +254,8 @@
         const nd = d + (target - d) * taper;
         px[i] = tipX + a * ch.ex + nd * uX;
         py[i] = Math.max(0.05, tipY + a * ch.ey + nd * uY);
-        vx[i] = flowAt(c, py[i]); vy[i] = 0;
+        flowXY(c, px[i], py[i], P, fo);
+        vx[i] = fo.x; vy[i] = fo.y;
       }
       lastMend = t;
       const N2 = px.length;
@@ -245,29 +306,32 @@
         const kn = 0.5 * RHO * CN * dl, kt = 0.5 * RHO * CT * Math.PI * dl;
         let tx = px[i + 1] - px[i - 1], ty = py[i + 1] - py[i - 1];
         const tl = Math.hypot(tx, ty) || 1; tx /= tl; ty /= tl;
-        const u = flowAt(c, py[i]);
-        const rx = vx[i] - u, ry = vy[i];
+        flowXY(c, px[i], py[i], P, fo);
+        const u = fo.x, uy = fo.y;
+        const rx = vx[i] - u, ry = vy[i] - uy;
         const rt = rx * tx + ry * ty;
         const rnx = rx - rt * tx, rny = ry - rt * ty, rn = Math.hypot(rnx, rny);
         const fn = 1 / (1 + dt * kn * rn / m), ft = 1 / (1 + dt * kt * Math.abs(rt) / m);
         vx[i] = u + rt * ft * tx + rnx * fn;
-        vy[i] = rt * ft * ty + rny * fn;
+        vy[i] = uy + rt * ft * ty + rny * fn;
         w[i] = 1 / (m + 2 * kn * Math.max(rn, 0.1) * dt);
       }
 
       // ---- lure drag in body frame
       {
         const hx = Math.cos(th), hy = Math.sin(th);
-        const u = flowAt(c, py[L1]);
-        const rx = vx[L1] - u, ry = vy[L1];
+        flowXY(c, px[L1], py[L1], P, fo);
+        const u = fo.x, uy = fo.y;
+        const rx = vx[L1] - u, ry = vy[L1] - uy;
         let ra = rx * hx + ry * hy, rl = -rx * hy + ry * hx;
         ra /= 1 + dt * ka * Math.abs(ra) / mL;
         rl /= 1 + dt * kl * Math.abs(rl) / mL;
         vx[L1] = u + ra * hx - rl * hy;
-        vy[L1] = ra * hy + rl * hx;
+        vy[L1] = uy + ra * hy + rl * hx;
         w[L1] = 1 / (mL + 2 * ka * Math.max(Math.abs(ra), 0.05) * dt);
       }
 
+      touching = false;
       // ---- predict
       const ox = px.slice(), oy = py.slice();
       for (let i = 1; i < n; i++) { px[i] += vx[i] * dt; py[i] += vy[i] * dt; }
@@ -286,6 +350,14 @@
         for (let i = 1; i < n; i++) {
           if (py[i] < 0.05) py[i] = 0.05;
           if (py[i] > W - 0.2) py[i] = W - 0.2;
+          for (let k = 0; k < P.length; k++) {
+            const p = P[k], dx = px[i] - p.x, dy = py[i] - p.y, d = Math.hypot(dx, dy), rr = p.r + (i === n - 1 ? 0.08 : 0.03);
+            if (d < rr) {
+              if (i < n - 1) touching = true;
+              const ux_ = d > 1e-6 ? dx / d : -1, uy_ = d > 1e-6 ? dy / d : 0;
+              px[i] = p.x + ux_ * rr; py[i] = p.y + uy_ * rr;
+            }
+          }
         }
       }
 
@@ -296,8 +368,9 @@
       for (let i = 1; i < n; i++) { vx[i] = (px[i] - ox[i]) / dt; vy[i] = (py[i] - oy[i]) / dt; }
 
       // ---- lure yaw: weathervane into the relative flow + torque from the line on the eye
-      const uL = flowAt(c, py[L1]);
-      const relx = vx[L1] - uL, rely = vy[L1];
+      flowXY(c, px[L1], py[L1], P, fo);
+      const uL = fo.x, uLy = fo.y;
+      const relx = vx[L1] - uL, rely = vy[L1] - uLy;
       const rel = Math.hypot(relx, rely);
       const lineA = Math.atan2(py[L1 - 1] - py[L1], px[L1 - 1] - px[L1]);
       let om = 0;
@@ -329,6 +402,18 @@
         events.push({ t, type: 'turn', x: px[L1], y: py[L1] });
       }
       prevPhi = phiS;
+      if (swim >= lure.actionMin) {
+        if (lowTime > 1.5) events.push({ t, type: 'load', x: px[L1], y: py[L1], phi: phiS });
+        lowTime = 0;
+      } else lowTime += dt;
+      if (touching && t - lastTouch > 3) events.push({ t, type: 'pier', x: px[L1], y: py[L1] });
+      if (touching) lastTouch = t;
+      const light = lightAt(c, px[L1], py[L1]);
+      const dark = light < 0.5;
+      if (prevDark !== null && dark !== prevDark) {
+        events.push({ t, type: dark ? 'shadeIn' : 'shadeOut', x: px[L1], y: py[L1], phi: phiS, swim, rel });
+      }
+      prevDark = dark;
 
       // ---- record
       if (t >= nextRec) {
@@ -338,7 +423,7 @@
           x: Float32Array.from(px), y: Float32Array.from(py),
           lx: px[L1], ly: py[L1], th, phi: phiS,
           T, slack, belly, swim, rel, relx, rely,
-          u: uL, vx: vx[L1], vy: vy[L1],
+          u: uL, uy: uLy, vx: vx[L1], vy: vy[L1], light,
           lineA, depth, reel, Lout: Ltot,
         });
       }
@@ -353,8 +438,8 @@
       if (Math.hypot(vx[L1], vy[L1]) < 0.06 && reel < 0.01) { stillTime += dt; if (stillTime > 6) { endReason = '下流で張って静止（ステイ）'; break; } } else stillTime = 0;
     }
 
-    return { cfg: c, lure, frames, events, endReason, tip: { x: tipX, y: tipY }, dt: REC };
+    return { cfg: c, lure, frames, events, endReason, tip: { x: tipX, y: tipY }, piers: P, dt: REC };
   }
 
-  return { simulate, flowAt, LURES, DEFAULTS, LINE, ROD_PROJ };
+  return { simulate, flowAt, flowXY, piersOf, lightAt, LURES, DEFAULTS, LINE, ROD_PROJ };
 });

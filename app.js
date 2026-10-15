@@ -38,6 +38,17 @@
       { key: 'mendStrength', label: 'メンドで返すライン', min: 0.3, max: 0.9, step: 0.05, fmt: (v) => `竿側 ${Math.round(v * 100)} %` },
       { type: 'mends' },
     ] },
+    { title: '橋と明暗', items: [
+      { key: 'bridge', type: 'toggle', label: '橋を架ける' },
+      { key: 'bridgeX', label: '橋の位置', min: -20, max: 60, step: 1, fmt: (v) => (v >= 0 ? `下流 ${v} m` : `上流 ${-v} m`), show: () => cfg.bridge },
+      { key: 'bridgeW', label: '橋の幅（流れ方向）', min: 4, max: 24, step: 1, fmt: (v) => `${v} m`, show: () => cfg.bridge },
+      { key: 'piers', type: 'seg', label: '水中の橋脚', options: [[0, 'なし'], [1, '1本'], [2, '2本'], [3, '3本']], show: () => cfg.bridge },
+      { key: 'pierD', label: '橋脚の太さ', min: 0.8, max: 4, step: 0.2, fmt: (v) => `φ ${v.toFixed(1)} m`, show: () => cfg.bridge && cfg.piers > 0, hint: () => '橋脚の前で流れが止まり、横で速まり、後ろに遅い流れ（反転流）の帯ができます' },
+      { key: 'shade', type: 'seg', label: '明暗', options: [['none', 'なし'], ['bridge', '橋の影'], ['lamp', '常夜灯']] },
+      { key: 'litSide', type: 'seg', label: '照明で明るい側', options: [['up', '上流側'], ['down', '下流側'], ['both', '両側']], show: () => cfg.shade === 'bridge' },
+      { key: 'lampX', label: '常夜灯の位置（手前の岸）', min: -20, max: 60, step: 1, fmt: (v) => (v >= 0 ? `下流 ${v} m` : `上流 ${-v} m`), show: () => cfg.shade === 'lamp' },
+      { key: 'lampR', label: '照らす範囲', min: 6, max: 35, step: 1, fmt: (v) => `半径 ${v} m`, show: () => cfg.shade === 'lamp' },
+    ] },
     { title: 'ルアー', items: [{ key: 'lure', type: 'select' }] },
   ];
   const outputs = {}, hints = {};
@@ -49,7 +60,7 @@
   }
 
   const rail = document.getElementById('rail');
-  const segButtons = {};
+  const segButtons = {}, toggles = {}, shows = [];
   let mendChips;
   GROUPS.forEach((g) => {
     const box = document.createElement('div');
@@ -63,13 +74,22 @@
         const seg = el.querySelector('.seg');
         segButtons[it.key] = it.options.map(([v, l]) => {
           const b = document.createElement('button');
-          b.type = 'button'; b.textContent = l; b.dataset.v = v;
-          b.addEventListener('click', () => { cfg[it.key] = v; syncControls(); recompute(); });
+          b.type = 'button'; b.textContent = l; b.dataset.v = String(v);
+          b.addEventListener('click', () => {
+            cfg[it.key] = v;
+            if (it.key === 'shade' && v === 'bridge') cfg.bridge = true;
+            syncControls(); recompute();
+          });
           seg.appendChild(b); return b;
         });
       } else if (it.type === 'toggle') {
         el.innerHTML = `<label class="toggle"><input type="checkbox" id="c-${it.key}"><span>${it.label}</span></label>`;
-        el.querySelector('input').addEventListener('change', (e) => { cfg[it.key] = e.target.checked; recompute(); });
+        toggles[it.key] = el.querySelector('input');
+        toggles[it.key].addEventListener('change', (e) => {
+          cfg[it.key] = e.target.checked;
+          if (it.key === 'bridge' && !cfg.bridge && cfg.shade === 'bridge') cfg.shade = 'none';
+          syncControls(); recompute();
+        });
       } else if (it.type === 'select') {
         const opts = Object.entries(S.LURES).map(([k, l]) => `<option value="${k}">${l.name}</option>`).join('');
         el.innerHTML = `<select id="c-lure" aria-label="ルアー">${opts}</select><div class="hint" id="h-lure"></div>`;
@@ -92,6 +112,7 @@
         outputs[it.key] = { el: el.querySelector('output'), it, inp };
         if (it.hint) hints[it.key] = { el: el.querySelector('.hint'), it };
       }
+      if (it.show) shows.push([el, it.show]);
       box.appendChild(el);
     });
     rail.appendChild(box);
@@ -100,8 +121,9 @@
   function syncControls() {
     Object.values(outputs).forEach(({ el, it, inp }) => { inp.value = cfg[it.key]; el.textContent = it.fmt(cfg[it.key]); });
     Object.entries(hints).forEach(([k, h]) => { if (k !== 'lure') h.el.textContent = h.it.hint(cfg[k]); });
-    Object.entries(segButtons).forEach(([k, bs]) => bs.forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === cfg[k]))));
-    document.getElementById('c-autoMend').checked = !!cfg.autoMend;
+    Object.entries(segButtons).forEach(([k, bs]) => bs.forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.v === String(cfg[k])))));
+    Object.entries(toggles).forEach(([k, inp]) => { inp.checked = !!cfg[k]; });
+    shows.forEach(([el, fn]) => { el.hidden = !fn(); });
     document.getElementById('c-lure').value = cfg.lure;
     const L = S.LURES[cfg.lure];
     hints.lure.textContent = L.kind === 'float'
@@ -128,6 +150,7 @@
     { name: 'アップクロス＋スラッグ多め', set: { castDeg: -35, castDist: 30, slack0: 0.25, slackSide: 'down', slackHold: 0.15, reelBase: 0, autoMend: false, mends: [] } },
     { name: 'アップクロス＋上流メンド', set: { castDeg: -35, castDist: 30, slack0: 0.2, slackSide: 'down', slackHold: 0.15, reelBase: 0, autoMend: false, mends: [{ t: 1.0, dir: 1 }, { t: 8.0, dir: 1 }] } },
     { name: 'クロス・張り気味でスイング', set: { castDeg: 0, castDist: 30, slack0: 0.05, slackSide: 'down', slackHold: 0.03, reelBase: 0.1, autoMend: false, mends: [] } },
+    { name: '橋の明暗へ流し込む', set: { castDeg: -30, castDist: 30, slack0: 0.2, slackSide: 'up', slackHold: 0.15, reelBase: 0, autoMend: false, mends: [{ t: 1.0, dir: 1 }], bridge: true, bridgeX: 15, bridgeW: 10, piers: 2, pierD: 2, shade: 'bridge', litSide: 'up' } },
     { name: 'ダウンクロス・ただ巻き', set: { castDeg: 40, castDist: 30, slack0: 0.05, slackSide: 'down', slackHold: 0, reelBase: 0.3, autoMend: false, mends: [] } },
   ];
   const presetBox = document.getElementById('presets');
@@ -183,6 +206,8 @@
     scan(result.frames);
     if (ghost) for (let i = 0; i < ghost.lx.length; i++) { xmin = Math.min(xmin, ghost.lx[i]); xmax = Math.max(xmax, ghost.lx[i]); }
     for (const f of [result.frames[0]]) for (let i = 0; i < f.x.length; i++) { xmin = Math.min(xmin, f.x[i]); xmax = Math.max(xmax, f.x[i]); }
+    if (rc.bridge) { xmin = Math.min(xmin, rc.bridgeX - rc.bridgeW / 2 - 4); xmax = Math.max(xmax, rc.bridgeX + rc.bridgeW / 2 + 4); }
+    if (rc.shade === 'lamp') { xmin = Math.min(xmin, rc.lampX - rc.lampR); xmax = Math.max(xmax, rc.lampX + rc.lampR); }
     bounds = { xmin: xmin - 5, xmax: xmax + 6, ymin: -4, ymax: rc.width + 3 };
     layout();
   }
@@ -227,11 +252,34 @@
       const pa = a.match(/\w\w/g).map((h) => parseInt(h, 16)), pb = b.match(/\w\w/g).map((h) => parseInt(h, 16));
       return `rgb(${pa.map((v, i) => Math.round(v + (pb[i] - v) * t)).join(',')})`;
     };
-    const step = 0.25;
-    for (let y = 0; y < W; y += step) {
-      g.fillStyle = mix(C['water-slow'], C['water-fast'], S.flowAt(rc, y + step / 2) / Math.max(rc.U, 0.01));
-      g.fillRect(x0, Y(y + step), x1 - x0, Math.ceil(step * bounds.s) + 1);
+    const hasPiers = result.piers.length > 0, shading = shadeOn(rc);
+    if (!hasPiers && !shading) {
+      const step = 0.25;
+      for (let y = 0; y < W; y += step) {
+        g.fillStyle = mix(C['water-slow'], C['water-fast'], S.flowAt(rc, y + step / 2) / Math.max(rc.U, 0.01));
+        g.fillRect(x0, Y(y + step), x1 - x0, Math.ceil(step * bounds.s) + 1);
+      }
+    } else {
+      // cell-by-cell: speed of the 2D flow, then night light level on top
+      const cell = Math.max(0.4, 2 / bounds.s), fo = { x: 0, y: 0 };
+      const a = C['water-slow'].match(/\w\w/g).map((h) => parseInt(h, 16)), b = C['water-fast'].match(/\w\w/g).map((h) => parseInt(h, 16));
+      const px = Math.ceil(cell * bounds.s) + 1;
+      for (let x = bounds.xmin; x < bounds.xmax; x += cell) {
+        for (let y = 0; y < W; y += cell) {
+          const cx = x + cell / 2, cy = y + cell / 2;
+          S.flowXY(rc, cx, cy, result.piers, fo);
+          const t = Math.min(1.3, Math.hypot(fo.x, fo.y) / Math.max(rc.U, 0.01));
+          let r = a[0] + (b[0] - a[0]) * t, gg = a[1] + (b[1] - a[1]) * t, bb = a[2] + (b[2] - a[2]) * t;
+          if (shading) {
+            const L = S.lightAt(rc, cx, cy), k = 0.42 + 0.7 * L;
+            r = r * k + 70 * L; gg = gg * k + 52 * L; bb = bb * k + 18 * L;
+          }
+          g.fillStyle = `rgb(${Math.min(255, r) | 0},${Math.min(255, gg) | 0},${Math.min(255, bb) | 0})`;
+          g.fillRect(X(x), Y(y + cell), px, px);
+        }
+      }
     }
+    drawStructures(g, rc);
     // banks
     g.strokeStyle = C['bank-edge']; g.lineWidth = 2;
     g.beginPath(); g.moveTo(x0, Y(0)); g.lineTo(x1, Y(0)); g.moveTo(x0, Y(W)); g.lineTo(x1, Y(W)); g.stroke();
@@ -264,14 +312,64 @@
     g.fillStyle = C.muted; g.textBaseline = 'top';
     g.fillText('立ち位置の岸', x0 + 6, Y(0) + 20 < RH - 14 ? Y(0) + 20 : RH - 14);
   }
+  function shadeOn(rc) { return rc.shade === 'lamp' || (rc.shade === 'bridge' && rc.bridge); }
+  function drawStructures(g, rc) {
+    const W = rc.width;
+    g.save();
+    g.beginPath(); g.rect(X(bounds.xmin), Y(W + 3), X(bounds.xmax) - X(bounds.xmin), Y(-4) - Y(W + 3)); g.clip();
+    if (rc.bridge) {
+      const bx0 = rc.bridgeX - rc.bridgeW / 2, bx1 = rc.bridgeX + rc.bridgeW / 2;
+      // piers first (seen through the translucent deck)
+      for (const p of result.piers) {
+        g.fillStyle = '#4b4f47'; g.strokeStyle = '#7d8174'; g.lineWidth = 1.5;
+        g.beginPath(); g.arc(X(p.x), Y(p.y), Math.max(3, p.r * bounds.s), 0, Math.PI * 2); g.fill(); g.stroke();
+      }
+      g.fillStyle = 'rgba(205,208,196,0.13)';
+      g.fillRect(X(bx0), Y(W + 3), X(bx1) - X(bx0), Y(-4) - Y(W + 3));
+      g.strokeStyle = 'rgba(215,218,205,0.55)'; g.lineWidth = 2;
+      g.beginPath(); g.moveTo(X(bx0), Y(W + 3)); g.lineTo(X(bx0), Y(-4)); g.moveTo(X(bx1), Y(W + 3)); g.lineTo(X(bx1), Y(-4)); g.stroke();
+      g.strokeStyle = 'rgba(215,218,205,0.25)'; g.lineWidth = 1;
+      g.beginPath(); g.moveTo(X(bx0 + 0.6), Y(W + 3)); g.lineTo(X(bx0 + 0.6), Y(-4)); g.moveTo(X(bx1 - 0.6), Y(W + 3)); g.lineTo(X(bx1 - 0.6), Y(-4)); g.stroke();
+      g.font = UI; g.fillStyle = 'rgba(227,235,232,0.75)'; g.textAlign = 'center'; g.textBaseline = 'top';
+      g.fillText('橋', X(rc.bridgeX), Y(W + 2.6));
+      if (rc.shade === 'bridge') {
+        const edges = [];
+        if (rc.litSide !== 'down') edges.push(bx0);
+        if (rc.litSide !== 'up') edges.push(bx1);
+        for (const ex of edges) {
+          for (let y = 3; y < W; y += 9) {
+            const gr = g.createRadialGradient(X(ex), Y(y), 0, X(ex), Y(y), 10);
+            gr.addColorStop(0, 'rgba(255,214,140,0.95)'); gr.addColorStop(1, 'rgba(255,214,140,0)');
+            g.fillStyle = gr; g.beginPath(); g.arc(X(ex), Y(y), 10, 0, Math.PI * 2); g.fill();
+          }
+          g.setLineDash([6, 5]); g.strokeStyle = 'rgba(255,214,140,0.85)'; g.lineWidth = 1.5;
+          g.beginPath(); g.moveTo(X(ex), Y(W)); g.lineTo(X(ex), Y(0)); g.stroke(); g.setLineDash([]);
+          g.fillStyle = 'rgba(255,214,140,0.95)'; g.textAlign = ex === bx0 ? 'right' : 'left'; g.textBaseline = 'bottom';
+          g.fillText('明暗', X(ex) + (ex === bx0 ? -5 : 5), Y(1.2));
+        }
+      }
+    }
+    if (rc.shade === 'lamp') {
+      const R = rc.lampR * Math.pow(1.25, 1 / 6);
+      g.setLineDash([6, 5]); g.strokeStyle = 'rgba(255,214,140,0.85)'; g.lineWidth = 1.5;
+      g.beginPath(); g.arc(X(rc.lampX), Y(-1), R * bounds.s, Math.PI, 2 * Math.PI); g.stroke(); g.setLineDash([]);
+      const gr = g.createRadialGradient(X(rc.lampX), Y(-1), 0, X(rc.lampX), Y(-1), 12);
+      gr.addColorStop(0, 'rgba(255,214,140,1)'); gr.addColorStop(1, 'rgba(255,214,140,0)');
+      g.fillStyle = gr; g.beginPath(); g.arc(X(rc.lampX), Y(-1), 12, 0, Math.PI * 2); g.fill();
+      g.font = UI; g.fillStyle = 'rgba(255,214,140,0.95)'; g.textAlign = 'center'; g.textBaseline = 'top';
+      g.fillText('常夜灯', X(rc.lampX), Y(-1) + 8);
+    }
+    g.restore();
+  }
 
   // ambient flow streaks (true current speed)
   let parts = [];
+  const pfo = { x: 0, y: 0 };
   function seedParticles() {
     const rc = result.cfg;
     parts = [];
     const n = reduceMotion ? 0 : Math.round(Math.min(260, (bounds.xmax - bounds.xmin) * rc.width / 14));
-    for (let i = 0; i < n; i++) parts.push({ x: bounds.xmin + Math.random() * (bounds.xmax - bounds.xmin), y: 0.3 + Math.random() * (rc.width - 0.6), a: Math.random() });
+    for (let i = 0; i < n; i++) parts.push({ x: bounds.xmin + Math.random() * (bounds.xmax - bounds.xmin), y: 0.3 + Math.random() * (rc.width - 0.6), age: Math.random() * 30 });
   }
 
   // ---------------------------------------------------------------- drawing helpers
@@ -327,11 +425,16 @@
       const adv = realDt * (playing ? speed : 1);
       g.lineWidth = 1; g.lineCap = 'round';
       for (const p of parts) {
-        const u = S.flowAt(rc, p.y);
-        p.x += u * adv;
-        if (p.x > bounds.xmax) { p.x = bounds.xmin; p.y = 0.3 + Math.random() * (rc.width - 0.6); }
-        g.strokeStyle = `rgba(108,196,214,${0.08 + 0.22 * (u / Math.max(rc.U, 0.01))})`;
-        g.beginPath(); g.moveTo(X(p.x - u * 1.2), Y(p.y)); g.lineTo(X(p.x), Y(p.y)); g.stroke();
+        S.flowXY(rc, p.x, p.y, result.piers, pfo);
+        const u = pfo.x, uy = pfo.y, sp = Math.hypot(u, uy);
+        p.x += u * adv; p.y += uy * adv;
+        p.age += adv;
+        if (p.x > bounds.xmax || p.x < bounds.xmin || p.y < 0.2 || p.y > rc.width - 0.2 || p.age > 40 || sp < 0.01) {
+          p.x = bounds.xmin + Math.random() * (bounds.xmax - bounds.xmin) * (Math.random() < 0.7 ? 0.15 : 1);
+          p.y = 0.3 + Math.random() * (rc.width - 0.6); p.age = 0;
+        }
+        g.strokeStyle = `rgba(108,196,214,${0.08 + 0.22 * Math.min(1, sp / Math.max(rc.U, 0.01))})`;
+        g.beginPath(); g.moveTo(X(p.x - u * 1.2), Y(p.y - uy * 1.2)); g.lineTo(X(p.x), Y(p.y)); g.stroke();
       }
     }
     const fr = result.frames, lm = result.lure.actionMin;
@@ -383,6 +486,18 @@
         g.fillStyle = C.mend; g.fillText(e.dir > 0 ? '↺' : '↻', x - 4, y - 8);
       } else if (e.type === 'taut') {
         g.fillStyle = C.tension; g.beginPath(); g.arc(x, y, 3.5, 0, Math.PI * 2); g.fill();
+      } else if (e.type === 'shadeIn') {
+        g.fillStyle = '#05090b'; g.strokeStyle = 'rgba(255,214,140,0.95)'; g.lineWidth = 1.5;
+        g.beginPath(); g.arc(x, y, 6, 0, Math.PI * 2); g.fill(); g.stroke();
+        g.fillStyle = 'rgba(255,214,140,0.95)'; g.beginPath(); g.arc(x, y, 6, Math.PI / 2, Math.PI * 1.5); g.fill();
+        g.fillText(`暗部へ ${e.t.toFixed(1)}s`, x + 9, y + 14);
+      } else if (e.type === 'pier') {
+        g.strokeStyle = C.tension; g.lineWidth = 2;
+        g.beginPath(); g.moveTo(x - 5, y - 5); g.lineTo(x + 5, y + 5); g.moveTo(x + 5, y - 5); g.lineTo(x - 5, y + 5); g.stroke();
+        g.fillStyle = C.tension; g.fillText('ラインが橋脚に接触', x + 9, y - 4);
+      } else if (e.type === 'load') {
+        g.fillStyle = C.swim; g.beginPath(); g.moveTo(x, y - 6); g.lineTo(x + 5, y + 4); g.lineTo(x - 5, y + 4); g.closePath(); g.fill();
+        g.fillText('泳ぎ出し', x + 8, y + 12);
       } else if (e.type === 'cast') {
         g.strokeStyle = C.text; g.lineWidth = 1.5; g.beginPath(); g.arc(x, y, 6, 0, Math.PI * 2); g.stroke();
         g.fillStyle = C.muted; g.fillText('着水', x + 8, y - 4);
@@ -420,6 +535,11 @@
     g.setTransform(DPR, 0, 0, DPR, 0, 0);
     g.clearRect(0, 0, S2, S2);
     g.fillStyle = C['water-slow']; g.beginPath(); g.arc(S2 / 2, S2 / 2, S2 / 2 - 2, 0, Math.PI * 2); g.fill();
+    if (shadeOn(result.cfg)) {
+      const L0 = frameAt(playT).light;
+      g.fillStyle = L0 < 0.5 ? `rgba(0,0,0,${0.5 - L0 * 0.6})` : `rgba(255,214,140,${L0 * 0.16})`;
+      g.fill();
+    }
     g.strokeStyle = C.rule; g.lineWidth = 1; g.stroke();
     const f = frameAt(playT), cx = S2 / 2, cy = S2 / 2, k = 62; // px per m/s
     g.font = NUM; g.fillStyle = C.faint; g.textAlign = 'center'; g.textBaseline = 'top';
@@ -444,7 +564,7 @@
   const readout = document.getElementById('readout'), stateEl = document.getElementById('state');
   const RO = [
     ['head', '頭の向き'], ['swim', '対水速度'], ['T', 'ライン張力'], ['ground', '対地 / 水流'],
-    ['slack', 'スラッグ'], ['belly', 'ベリー'], ['Lout', 'ライン出量'], ['depth', '泳層（目安）'],
+    ['slack', 'スラッグ'], ['belly', 'ベリー'], ['Lout', 'ライン出量'], ['depth', '泳層（目安）'], ['light', '明暗'],
   ];
   readout.innerHTML = RO.map(([k, l]) => `<div><span>${l}</span><b id="r-${k}"></b></div>`).join('');
   const R = Object.fromEntries(RO.map(([k]) => [k, document.getElementById('r-' + k)]));
@@ -475,6 +595,7 @@
     R.belly.innerHTML = `${Math.abs(f.belly).toFixed(1)}${em(f.belly >= 0 ? 'm 下流側' : 'm 上流側')}`;
     R.Lout.innerHTML = `${f.Lout.toFixed(1)}${em('m')}`;
     R.depth.innerHTML = `${f.depth.toFixed(2)}${em('m')}`;
+    R.light.innerHTML = shadeOn(result.cfg) ? `${f.light < 0.5 ? '暗' : '明'}${em(`光量 ${Math.round(f.light * 100)}%`)}` : `—${em('設定なし')}`;
     const [s, d] = stateOf(f);
     stateEl.innerHTML = `${s}<small>${d}</small>`;
   }
@@ -486,7 +607,19 @@
     const taut = ev.find((e) => e.type === 'taut'), turn = ev.find((e) => e.type === 'turn');
     let nat = 0, swim = 0;
     for (const f of fr) { if (f.rel < 0.1) nat += r.dt; if (f.swim >= r.lure.actionMin) swim += r.dt; }
-    return { taut, turn, nat, swim, dur: fr[fr.length - 1].t, end: r.endReason, mends: ev.filter((e) => e.type === 'mend').length };
+    const load = ev.find((e) => e.type === 'load'), shadeIn = ev.find((e) => e.type === 'shadeIn');
+    let dark = 0;
+    if (shadeOn(r.cfg)) for (const f of fr) if (f.light < 0.5) dark += r.dt;
+    return {
+      taut, turn, load, shadeIn, nat, swim, dark, shading: shadeOn(r.cfg), hasPiers: r.piers.length > 0,
+      pier: ev.filter((e) => e.type === 'pier').length,
+      dur: fr[fr.length - 1].t, end: r.endReason, mends: ev.filter((e) => e.type === 'mend').length,
+    };
+  }
+  function entryText(e) {
+    if (!e) return '入らない';
+    const how = e.rel < 0.1 ? '流れに乗って' : e.swim >= result.lure.actionMin ? '泳ぎながら' : '弱く引かれて';
+    return `${e.t.toFixed(1)} s・頭は${headText(e.phi)}・${how}`;
   }
   function renderSummary() {
     const s = summarize(result), gs = ghost && ghost.sum;
@@ -497,6 +630,10 @@
       cell('ターン位置', pos(s.turn), gs ? pos(gs.turn) : '') +
       cell('ナチュラルドリフト', `${s.nat.toFixed(1)} s`, gs ? `${gs.nat.toFixed(1)} s` : '') +
       cell('泳いでいる時間', `${s.swim.toFixed(1)} s`, gs ? `${gs.swim.toFixed(1)} s` : '') +
+      cell('泳ぎ出し', s.load ? `${s.load.t.toFixed(1)} s` : '—', gs ? (gs.load ? `${gs.load.t.toFixed(1)} s` : '—') : '') +
+      (s.shading ? cell('暗部へ入った時', entryText(s.shadeIn), gs ? entryText(gs.shadeIn) : '', 'shade') +
+        cell('暗部にいた時間', `${s.dark.toFixed(1)} s`, gs ? `${(gs.dark || 0).toFixed(1)} s` : '') : '') +
+      (s.hasPiers ? cell('ラインの橋脚接触', s.pier ? `${s.pier} 回` : 'なし', gs ? (gs.pier ? `${gs.pier} 回` : 'なし') : '') : '') +
       cell('終了', `${s.dur.toFixed(0)} s・${s.end}`, gs ? `${gs.dur.toFixed(0)} s` : '');
   }
 
@@ -525,7 +662,7 @@
       { label: '張力 gf', get: (f) => f.T * 101.97, min: 0, max: Math.ceil(maxT / 10) * 10, color: C.tension, h: 1 },
       { label: 'スラッグ %', get: (f) => f.slack * 100, min: 0, max: Math.ceil(maxSl / 10) * 10, color: C.pe, h: 0.8 },
       { label: '泳層 m', get: (f) => f.depth, min: 0, max: Math.ceil(maxD * 2) / 2, color: C.rel, invert: true, h: 0.8 },
-    ];
+    ].concat(shadeOn(result.cfg) ? [{ label: '明暗', get: (f) => f.light, min: 0, max: 1, strip: true, h: 0.28 }] : []);
   }
   let chartGeom = null;
   function drawCharts() {
@@ -543,6 +680,18 @@
     for (const l of L) {
       const h = avail * l.h / tot;
       const ty = (v) => (l.invert ? y0 + h * (v - l.min) / (l.max - l.min) : y0 + h - h * (v - l.min) / (l.max - l.min));
+      if (l.strip) {
+        const wpx = (CW - left - right) / fr.length + 0.6;
+        for (const f of fr) {
+          const L0 = f.light;
+          g.fillStyle = L0 < 0.5 ? `rgba(0,0,0,${0.85 - L0})` : `rgba(255,214,140,${0.25 + 0.6 * L0})`;
+          g.fillRect(tx(f.t), y0, wpx, h);
+        }
+        g.fillStyle = C.muted; g.textAlign = 'right'; g.textBaseline = 'middle'; g.font = UI;
+        g.fillText('明暗', left - 6, y0 + h / 2); g.font = NUM;
+        y0 += h + gap;
+        continue;
+      }
       g.fillStyle = 'rgba(227,235,232,0.03)'; g.fillRect(left, y0, CW - left - right, h);
       if (l.band) { g.fillStyle = 'rgba(159,230,198,0.07)'; g.fillRect(left, ty(l.band[1]), CW - left - right, ty(l.band[0]) - ty(l.band[1])); }
       g.strokeStyle = 'rgba(227,235,232,0.08)'; g.lineWidth = 1;
@@ -590,11 +739,12 @@
     // events
     g.textBaseline = 'top'; g.textAlign = 'center'; g.font = UI;
     for (const e of result.events) {
-      if (e.type !== 'turn' && e.type !== 'mend') continue;
+      const sty = { turn: [C.turn, 'ターン'], mend: [C.mend, e.dir > 0 ? '↺' : '↻'], shadeIn: ['#ffd68c', '暗部へ'], pier: [C.tension, '✕'] }[e.type];
+      if (!sty) continue;
       const x = tx(e.t);
-      g.strokeStyle = e.type === 'turn' ? C.turn : C.mend; g.lineWidth = 1; g.globalAlpha = 0.7;
+      g.strokeStyle = sty[0]; g.lineWidth = 1; g.globalAlpha = 0.7;
       g.beginPath(); g.moveTo(x, top); g.lineTo(x, CH - bottom); g.stroke(); g.globalAlpha = 1;
-      g.fillStyle = g.strokeStyle; g.fillText(e.type === 'turn' ? 'ターン' : (e.dir > 0 ? '↺' : '↻'), x, 1);
+      g.fillStyle = sty[0]; g.fillText(sty[1], x, 1);
     }
     // time axis
     g.fillStyle = C.muted; g.font = NUM; g.textBaseline = 'top';
@@ -665,6 +815,7 @@
   let rsTimer = null;
   window.addEventListener('resize', () => { clearTimeout(rsTimer); rsTimer = setTimeout(() => { if (bounds) layout(); }, 100); });
 
+  if (location.hash === '#bridge') { const pb = PRESETS.find((p) => p.set.bridge); if (pb) Object.assign(cfg, JSON.parse(JSON.stringify(pb.set))); }
   syncControls();
   layout();
   onResult(S.simulate(JSON.parse(JSON.stringify(cfg))), false);
